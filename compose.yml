@@ -11,13 +11,17 @@ x-healthcheck-defaults: &healthcheck_defaults
   timeout: 1m30s
   retries: 10
   start_period: 10s
+
 x-depends_on-healthy: &depends_on-healthy
   condition: service_healthy
+
+x-postgres-env: &postgres_env .env.pg
+x-rabbitmq-env: &rabbitmq_env .env.rabbitmq
 
 services:
   redis:
     <<: *restart_policy
-    image: redis
+    image: redis:8.2-bookworm
     healthcheck:
       <<: *healthcheck_defaults
       test: "redis-cli ping"
@@ -30,13 +34,14 @@ services:
   postgres:
     <<: *restart_policy
     image: postgres:13
+    #   image: timescale/timescaledb:latest-pg13
     healthcheck:
       <<: *healthcheck_defaults
       test: "pg_isready -U postgres"
-    environment:
-      - POSTGRES_HOST_AUTH_METHOD=trust
     volumes:
       - postgres:/var/lib/postgresql/data
+    env_file:
+      - *postgres_env
 
   pgbouncer:
     <<: *restart_policy
@@ -54,30 +59,12 @@ services:
     depends_on:
       postgres:
         <<: *depends_on-healthy
-    environment:
-      DB_USER: postgres
-      DB_HOST: postgres
-      DB_NAME: sdmprod
-      AUTH_TYPE: trust
-      POOL_MODE: transaction
-      ADMIN_USERS: postgres
-      MAX_CLIENT_CONN: 10000
-
-  timescale:
-    image: timescale/timescaledb:latest-pg13
-    healthcheck:
-      <<: *healthcheck_defaults
-      test: "pg_isready -U postgres"
-    environment:
-      - POSTGRES_HOST_AUTH_METHOD=trust
-    volumes:
-      - timescale:/var/lib/postgresql/data
-    ports:
-      - 15432:5432
+    env_file:
+      - *postgres_env
 
   rabbitmq:
     <<: *restart_policy
-    image: rabbitmq:management
+    image: rabbitmq:4.1-management
     healthcheck:
       <<: *healthcheck_defaults
       test: "rabbitmqctl node_health_check"
@@ -86,6 +73,8 @@ services:
       - 5672:5672
     volumes:
       - rabbitmq:/var/lib/rabbitmq
+    env_file:
+      - *rabbitmq_env
 
   clickhouse:
     <<: *restart_policy
