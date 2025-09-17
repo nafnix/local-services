@@ -1,33 +1,91 @@
 x-restart-policy: &restart_policy
   restart: unless-stopped
 
+x-healthcheck-defaults: &healthcheck_defaults
+  # Avoid setting the interval too small, as docker uses much more CPU than one would expect.
+  # Related issues:
+  # https://github.com/moby/moby/issues/39102
+  # https://github.com/moby/moby/issues/39388
+  # https://github.com/getsentry/self-hosted/issues/1000
+  interval: 30s
+  timeout: 1m30s
+  retries: 10
+  start_period: 10s
+x-depends_on-healthy: &depends_on-healthy
+  condition: service_healthy
+
 services:
   redis:
     <<: *restart_policy
-    image: redis/redis-stack:latest
+    image: redis
+    healthcheck:
+      <<: *healthcheck_defaults
+      test: "redis-cli ping"
     ports:
       - 6379:6379
       - 8001:8001
+    volumes:
+      - redis:/data
 
   postgres:
     <<: *restart_policy
-    image: postgres:17
-    ports:
-      - 5432:5432
+    image: postgres:13
+    healthcheck:
+      <<: *healthcheck_defaults
+      test: "pg_isready -U postgres"
     environment:
       - POSTGRES_HOST_AUTH_METHOD=trust
+    volumes:
+      - postgres:/var/lib/postgresql/data
+
+  pgbouncer:
+    <<: *restart_policy
+    image: edoburu/pgbouncer:v1.24.1-p1
+    healthcheck:
+      <<: *healthcheck_defaults
+      # Using default user "postgres" from sentry/sentry.conf.example.py or value of POSTGRES_USER if provided
+      test:
+        [
+          "CMD-SHELL",
+          'psql -U postgres -p 5432 -h 127.0.0.1 -tA -c "select 1;" -d postgres >/dev/null',
+        ]
+    ports:
+      - 5432:5432
+    depends_on:
+      postgres:
+        <<: *depends_on-healthy
+    environment:
+      DB_USER: postgres
+      DB_HOST: postgres
+      DB_NAME: sdmprod
+      AUTH_TYPE: trust
+      POOL_MODE: transaction
+      ADMIN_USERS: postgres
+      MAX_CLIENT_CONN: 10000
+
+  timescale:
+    image: timescale/timescaledb:latest-pg13
+    healthcheck:
+      <<: *healthcheck_defaults
+      test: "pg_isready -U postgres"
+    environment:
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    volumes:
+      - timescale:/var/lib/postgresql/data
+    ports:
+      - 15432:5432
 
   rabbitmq:
     <<: *restart_policy
     image: rabbitmq:management
     healthcheck:
+      <<: *healthcheck_defaults
       test: "rabbitmqctl node_health_check"
-      interval: 30s
-      timeout: 30s
-      retries: 3
     ports:
       - 15672:15672
       - 5672:5672
+    volumes:
+      - rabbitmq:/var/lib/rabbitmq
 
   clickhouse:
     <<: *restart_policy
@@ -48,6 +106,7 @@ services:
       # You might want to change this to a higher value (and ensure your host has enough memory)
       MAX_MEMORY_USAGE_RATIO: 0.3
     healthcheck:
+      <<: *healthcheck_defaults
       test: [
           "CMD-SHELL",
           # Manually override any http_proxy envvar that might be set, because
@@ -55,40 +114,40 @@ services:
           # https://github.com/getsentry/self-hosted/issues/1537
           "http_proxy='' wget -nv -t1 --spider 'http://localhost:8123/' || exit 1",
         ]
-      interval: 10s
-      timeout: 10s
-      retries: 30
-  n8n:
-    <<: *restart_policy
-    image: docker.n8n.io/n8nio/n8n
-    ports:
-      - 5678:5678
-    environment:
-      - NODE_ENV=production
-      - GENERIC_TIMEZONE=Asia/Shanghai
-      - TZ=Asia/Shanghai
-      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
-      - N8N_RUNNERS_ENABLED=true
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_DATABASE=n8n
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_USER=postgres
-      - DB_POSTGRESDB_SCHEMA=public
-      # - DB_POSTGRESDB_PASSWORD=empty
-    volumes:
-      - "n8n:/home/node/.n8n"
-      - ./local-files:/files
+
+  # n8n:
+  #   <<: *restart_policy
+  #   image: docker.n8n.io/n8nio/n8n
+  #   ports:
+  #     - 5678:5678
+  #   environment:
+  #     - NODE_ENV=production
+  #     - GENERIC_TIMEZONE=Asia/Shanghai
+  #     - TZ=Asia/Shanghai
+  #     - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+  #     - N8N_RUNNERS_ENABLED=true
+  #     - DB_TYPE=postgresdb
+  #     - DB_POSTGRESDB_DATABASE=n8n
+  #     - DB_POSTGRESDB_HOST=postgres
+  #     - DB_POSTGRESDB_PORT=5432
+  #     - DB_POSTGRESDB_USER=postgres
+  #     - DB_POSTGRESDB_SCHEMA=public
+  #     # - DB_POSTGRESDB_PASSWORD=empty
+  #   volumes:
+  #     - "n8n:/home/node/.n8n"
+  #     - ./local-files:/files
 
 volumes:
   redis:
     external: true
   postgres:
     external: true
+  timescale:
+    external: true
   rabbitmq:
     external: true
   clickhouse:
     external: true
   clickhouse-log:
-  n8n:
-    external: true
+  # n8n:
+  #   external: true
