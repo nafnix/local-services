@@ -15,21 +15,28 @@ x-healthcheck-defaults: &healthcheck_defaults
 x-depends_on-healthy: &depends_on-healthy
   condition: service_healthy
 
-x-postgres-env: &postgres_env .env.pg
-x-rabbitmq-env: &rabbitmq_env .env.rabbitmq
+x-postgres-env-file: &postgres_env_file .env.pg
+x-rabbitmq-env-file: &rabbitmq_env_file .env.rabbitmq
+
+x-redis-legacy-auth: &redis_legacy_auth
+  environment:
+    - REDIS_PASSWORD=123asd
+  command: sh -c "redis-server --requirepass $$REDIS_PASSWORD --bind 0.0.0.0 --appendonly yes"
 
 services:
   redis:
-    <<: *restart_policy
-    image: redis:8.2-bookworm
+    <<: [*restart_policy, *redis_legacy_auth]
+    image: redis:7.4-bookworm
     healthcheck:
       <<: *healthcheck_defaults
       test: "redis-cli ping"
     ports:
       - 6379:6379
-      - 8001:8001
     volumes:
       - redis:/data
+      # - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      # - ./redis/users.acl:/usr/local/etc/redis/users.acl:ro
+    # command: ["/usr/local/etc/redis/redis.conf"]
 
   postgres:
     <<: *restart_policy
@@ -41,7 +48,7 @@ services:
     volumes:
       - postgres:/var/lib/postgresql/data
     env_file:
-      - *postgres_env
+      - *postgres_env_file
     ports:
       - 5432:5432
 
@@ -62,7 +69,7 @@ services:
       postgres:
         <<: *depends_on-healthy
     env_file:
-      - *postgres_env
+      - *postgres_env_file
 
   rabbitmq:
     <<: *restart_policy
@@ -76,7 +83,7 @@ services:
     volumes:
       - rabbitmq:/var/lib/rabbitmq
     env_file:
-      - *rabbitmq_env
+      - *rabbitmq_env_file
 
   clickhouse:
     <<: *restart_policy
